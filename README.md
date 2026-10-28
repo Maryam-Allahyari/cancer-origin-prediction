@@ -1,149 +1,120 @@
 # Predicting Cancer Origin from Tumour Genomics
 
-Can a machine learning model tell where a metastatic tumour started, using only the tumour's gene expression and mutations?
+[![tests](https://github.com/Maryam-Allahyari/cancer-origin-prediction/actions/workflows/ci.yml/badge.svg)](https://github.com/Maryam-Allahyari/cancer-origin-prediction/actions/workflows/ci.yml)
 
-This project tries to answer that with real patient data from the Personalized OncoGenomics (POG) program at BC Cancer (570 patients with advanced cancer, Pleasance et al., 2020). It is a work in progress. First results are below.
+Can a tumour's genes tell us where a metastatic cancer started?
 
-## Why this question matters
+Cancer treatment is usually chosen by the organ the cancer came from: breast cancer that has spread to the liver is still treated as breast cancer. In about 3–5% of patients, doctors find metastases but can't identify where they started, even after a full work-up. This is called cancer of unknown primary, and it usually has a poor outlook (Pavlidis & Pentheroudakis, 2012). Tumours keep some molecular memory of their tissue of origin, and several groups have built classifiers on this idea from RNA-seq data (Grewal et al., 2019), targeted DNA panels (Penson et al., 2020; Moon et al., 2023) and whole-genome mutation patterns (Jiao et al., 2020).
 
-Treatment for cancer is usually chosen by the organ it came from. Breast cancer that has spread to the liver is still treated as breast cancer. In about 3–5% of patients, though, doctors find metastases but cannot identify the primary site, even after a full work-up. This is called cancer of unknown primary (CUP), and it usually has a poor outlook (Pavlidis & Pentheroudakis, 2012).
+This project is a smaller, reproducible version of that idea. It uses real data from the Personalized OncoGenomics (POG) program at BC Cancer: gene expression and somatic mutations from 570 patients with advanced cancer (Pleasance et al., 2020). Every patient's cancer type is known, so the question is how well that known origin can be recovered from a metastatic biopsy.
 
-Tumours tend to keep some molecular "memory" of their tissue of origin. Several groups have used this to build classifiers from RNA-seq data (Grewal et al., 2019), from targeted DNA panels (Penson et al., 2020; Moon et al., 2023) and from whole-genome mutation patterns (Jiao et al., 2020). This project is a smaller, fully reproducible version of the same idea that I can run end to end on a laptop.
+## Key findings
 
-In the POG cohort the true cancer type of every patient is known, so this is not a CUP study. The point is to see how well the origin can be recovered from metastatic biopsies when we already know the right answer.
-
-## Questions
-
-1. How accurately can gene expression predict the cancer type of a metastatic biopsy?
-2. Do mutation features (driver gene mutations, tumour mutation burden) add anything on top of expression, or do they work on their own?
-3. Does the biopsy site get in the way? A sample taken from a liver metastasis contains some normal liver tissue, and a model could learn "liver" instead of the real primary.
-4. Which genes drive the predictions, and do they match known tissue markers?
+- **A model based on gene expression classifies metastatic biopsies by cancer type with about 0.83 balanced accuracy** across 7 cancer types (chance is about 0.14).
+- Mutations alone reach about 0.41. The driver-gene mutation features added nothing on top of expression.
+- A regularised logistic regression did better than XGBoost on this small dataset.
+- Liver biopsies dominate the main pattern in the expression data, because some normal liver tissue ends up in the sample. The model was not misled by this: liver biopsies were classified as well as others.
+- Known tissue markers are among the genes driving predictions, for example GATA3 for breast and NKX2-1 for lung.
 
 ## Data
 
-All data come from the POG570 release by BC Cancer's Genome Sciences Centre:
-<https://www.bcgsc.ca/downloads/POG570/>
+All data come from the POG570 release by BC Cancer's Genome Sciences Centre: <https://www.bcgsc.ca/downloads/POG570/>
 
 | File | Used for |
 |---|---|
-| `POG570_TPM_expression.txt.gz` | Gene expression features |
-| `POG570_small_mutations.txt.gz` | Mutation features (somatic SNVs and indels, hg19) |
-| `Table_S1_Demographics.xlsx` | Cancer type (the label) and patient details |
+| `POG570_TPM_expression.txt.gz` | Gene expression (RNA-seq, TPM), the expression features |
+| `POG570_small_mutations.txt.gz` | Somatic SNVs and indels from whole-genome sequencing, the mutation features |
+| `Table_S1_Demographics.xlsx` | Cancer type (the label), biopsy site and patient details |
 
-**The data are not included in this repository.** The release is for research use only and may not be redistributed. Download the files yourself and put them in `Data/Raw/`. See [docs/data.md](docs/data.md) for file details, cleaning rules and the terms of use.
+**The data are not included in this repository.** The release is for research use only and may not be redistributed. See [docs/data.md](docs/data.md) for file details, cleaning rules and the terms of use.
 
-## Approach
+## Methods
 
-The plan, step by step:
+I kept cancer types with at least 15 patients, which left 434 patients in 7 types (BRCA, COLO, LUNG, SARC, PANC, OV, CNS-PNS). Expression values were log2(TPM + 1) transformed, and the 2,000 most variable genes were selected inside each training fold. Mutation features were a mutated / not mutated table for 64 known driver genes (Sondka et al., 2018) plus tumour mutation burden.
 
-1. **Load and clean.** Check for duplicate patients, missing labels and impossible values. Log how many patients and genes are kept at each step.
-2. **Expression features.** Transform TPM values with log2(TPM + 1) and keep the most variable genes.
-3. **Mutation features.** Keep protein-changing mutations, build a patient × gene table (mutated or not) for well-known cancer driver genes, for example from the COSMIC Cancer Gene Census (Sondka et al., 2018), and add tumour mutation burden.
-4. **Exploration.** PCA of the expression data coloured by cancer type and by biopsy site, plus basic statistics (e.g. does mutation burden differ between cancer types?).
-5. **Models.** A multinomial logistic regression baseline, then XGBoost (Chen & Guestrin, 2016), both built with scikit-learn pipelines (Pedregosa et al., 2011). Each model is trained three ways: expression only, mutations only, and both together.
-6. **Evaluation.** Stratified 5-fold cross-validation on the training set, plus a held-out test set that is only used once at the end. I report balanced accuracy, because some cancer types have many more patients than others, along with a confusion matrix. Scaling and feature selection are fitted inside the cross-validation folds so no information leaks from the test data.
-7. **Explanation.** SHAP values (Lundberg & Lee, 2017) to see which genes push a sample towards each cancer type, and whether biopsy site shows up in the explanations.
-8. **Reproducibility.** The whole analysis will run as a Nextflow pipeline (Di Tommaso et al., 2017) inside a Docker container, with unit tests run by GitHub Actions on every push.
+I compared logistic regression and XGBoost (Chen & Guestrin, 2016) on three feature sets: expression, mutations, and both. All preprocessing sat inside scikit-learn pipelines (Pedregosa et al., 2011), so nothing was learned from the data being scored. Models were compared with 5-fold cross-validation, repeated five times on 80% of the patients. The final model was chosen beforehand as the simplest one within one standard deviation of the best, and only that model was scored on the remaining 20%. Because the classes are imbalanced, I report balanced accuracy. SHAP values (Lundberg & Lee, 2017) show which genes drive each prediction.
 
-## Repository layout
+94 of the 434 biopsies were not metastatic. These are often taken from the organ where the cancer started, which makes them easy to classify, so every result is reported for all patients and for metastatic biopsies on their own.
 
-```
-Cancer_Analysis/
-├── README.md
-├── main.nf                # Nextflow pipeline
-├── nextflow.config        # parameters and profiles (standard, docker, slurm)
-├── Dockerfile             # container with all Python packages
-├── requirements.txt       # pinned package versions
-├── environment.yml        # conda alternative
-├── docs/
-│   └── data.md            # data description, cleaning rules, terms of use
-├── Data/
-│   └── Raw/               # downloaded POG570 files (not committed)
-├── resources/
-│   └── driver_genes.txt   # driver genes used as mutation features
-├── scripts/
-│   ├── download_data.sh   # fetch the POG570 files
-│   └── run_local.sh       # run all steps without Nextflow
-├── src/
-│   ├── load.py            # read expression, mutations and demographics
-│   ├── clean.py           # quality checks and filtering
-│   ├── features.py        # mutation features (driver genes, TMB)
-│   ├── explore.py         # PCA, liver signal, statistical tests
-│   ├── train.py           # models, cross-validation, test set
-│   ├── explain.py         # SHAP and biopsy-site check
-│   └── markers.py         # known marker genes
-├── tests/                 # pytest unit tests on small fake datasets
-└── .github/workflows/     # runs the tests on every push
-```
+## Results
+
+**Cross-validation** (347 training patients, balanced accuracy, mean ± SD over 5 repeats). These numbers come from the Nextflow pipeline running in Docker. Logistic regression gives identical results on any machine, while XGBoost can differ by about 0.01 between machines because its multithreaded training isn't bit-for-bit reproducible.
+
+| Model | Features | All patients | Metastatic only |
+|---|---|---|---|
+| Logistic regression | Expression | 0.88 ± 0.01 | 0.83 ± 0.01 |
+| Logistic regression | Mutations | 0.46 ± 0.02 | 0.41 ± 0.01 |
+| Logistic regression | Both | 0.88 ± 0.01 | 0.83 ± 0.01 |
+| XGBoost | Expression | 0.85 ± 0.01 | 0.80 ± 0.03 |
+| XGBoost | Mutations | 0.41 ± 0.02 | 0.38 ± 0.02 |
+| XGBoost | Both | 0.84 ± 0.01 | 0.79 ± 0.02 |
+
+**Held-out test set**, final model only (logistic regression on expression; 87 patients, 65 metastatic):
+
+| | Balanced accuracy (95% bootstrap CI) |
+|---|---|
+| All test patients | 0.89 (0.79–0.97) |
+| Metastatic test patients | 0.80 (0.73–0.98) |
+
+The test set is small, so its intervals are wide. The cross-validation numbers are the more reliable estimate.
+
+![Confusion matrix of the final model on the test set](docs/figures/confusion_matrix.png)
+
+Most errors are between cancer types that are biologically close. In cross-validation, lung, colorectal and pancreatic cancers (all mostly adenocarcinomas, which grow from gland-forming cells) were sometimes confused with each other. CNS-PNS tumours and sarcomas were also mixed up, which makes sense because the CNS-PNS group includes nerve sheath tumours that are sarcomas themselves.
+
+Adding the 65 mutation columns to the 2,000 expression features changed the model's predictions for only a handful of patients, so on this data the mutations carry little information that expression doesn't already have. For the biopsy-site question, liver-specific genes such as ALB and APOA1 ranked low in the model and made up a median of under 0.5% of each patient's SHAP explanation.
 
 ## How to run
 
-1. Download the data (about 300 MB):
-   ```bash
-   bash scripts/download_data.sh
-   ```
-2. Run the pipeline with Nextflow and Docker (needs Linux or WSL, Java 17+, Nextflow and Docker):
-   ```bash
-   docker build -t cancer-origin:1.0 .
-   nextflow run main.nf -profile docker
-   ```
-   Or, without Nextflow, install the packages and run every step in order:
-   ```bash
-   pip install -r requirements.txt
-   bash scripts/run_local.sh
-   ```
-3. Run the tests (these use small fake data, no download needed):
-   ```bash
-   pytest
-   ```
+You need Python 3.13 and about 300 MB of disk space for the data.
 
-Results are written to `results/`.
+First download the data into `Data/Raw`:
 
-## First results
+```bash
+bash scripts/download_data.sh
+```
 
-From the first full run (434 patients, 7 cancer types; seed 42). These numbers will change a bit if the split or settings change.
+**With Nextflow and Docker** (Linux or WSL, Java 17+, Nextflow, Docker):
 
-| Model | Features | CV balanced accuracy (5-fold, mean ± SD) | Test balanced accuracy (95% bootstrap CI) |
-|---|---|---|---|
-| Logistic regression | Expression | 0.88 ± 0.05 | 0.89 (0.79–0.97) |
-| Logistic regression | Mutations | 0.46 ± 0.05 | 0.51 (0.42–0.61) |
-| Logistic regression | Both | 0.87 ± 0.05 | 0.89 (0.79–0.97) |
-| XGBoost | Expression | 0.83 ± 0.05 | 0.85 (0.75–0.95) |
-| XGBoost | Mutations | 0.43 ± 0.02 | 0.46 (0.37–0.57) |
-| XGBoost | Both | 0.83 ± 0.03 | 0.85 (0.75–0.95) |
+```bash
+docker build -t cancer-origin:1.0 .
+nextflow run main.nf -profile docker
+```
 
-What I take from this so far:
+Nextflow runs each step in the container and writes results to `results/`. If a run stops or a setting changes, `-resume` reuses the steps that are already done.
 
-- Expression carries most of the signal. Mutations alone do much better than chance (1 in 7, about 0.14), but adding them to expression did not improve the scores.
-- The simpler logistic regression did at least as well as XGBoost on this small dataset.
-- Liver biopsies are a big part of the expression variation (the first principal component largely separates them), but the model was not worse on liver biopsies (out-of-fold accuracy 0.93 vs 0.88 for other sites), and liver-specific genes contributed very little to its predictions.
-- Known tissue markers come up among the most important genes, for example GATA3 for breast, CDX2 for colorectal and NKX2-1 for lung.
+**Without Nextflow:**
 
-## Progress
+```bash
+pip install -r requirements.txt
+bash scripts/run_local.sh            # clean -> features -> explore -> train -> explain
+```
 
-- [x] Repository and test skeleton
-- [x] Data loading and cleaning
-- [x] Exploratory analysis and PCA
-- [x] Baseline model (logistic regression)
-- [x] XGBoost and feature-set comparison
-- [x] SHAP analysis and biopsy-site check
-- [ ] Nextflow pipeline and Docker image tested end to end
-- [ ] CI running on GitHub
-- [ ] Final report
+A full run takes 20–40 minutes, mostly for the XGBoost cross-validation.
+
+The tests use small made-up data, so they don't need the download:
+
+```bash
+pytest
+```
 
 ## Limitations
 
-These will be revisited once results are in, but some are clear from the start:
+- 434 patients over 7 cancer types, and some groups are small (CNS-PNS has 19 patients). Rarer cancer types had to be left out.
+- Some labels group quite different tumours: LUNG includes mesotheliomas, PANC includes neuroendocrine tumours, and CNS-PNS mixes several brain and nerve tumours.
+- All samples come from one program at one centre, so results may not carry over to other hospitals or sequencing methods.
+- Many patients had been treated before the biopsy, and treatment leaves marks on the tumour genome (Pleasance et al., 2020).
+- Good results on cancers of known origin don't show that the model would work on true cancers of unknown primary.
 
-- 570 patients spread over many cancer types means some classes are small. Rare types will be dropped or grouped.
-- All samples come from one program at one centre, so results may not hold for other hospitals or sequencing methods.
-- Many POG patients had been treated before the biopsy, and the POG570 paper showed that treatment leaves marks on the tumour genome (Pleasance et al., 2020).
-- A good score on known cancer types does not mean the model would work on true CUP cases.
+## Next steps
+
+- Better DNA-only features: regional mutation density across the genome and mutation spectra. A first test raised DNA-only balanced accuracy from 0.46 to about 0.61.
+- Cleaner labels: separate mesotheliomas and neuroendocrine tumours, and reconsider the mixed CNS-PNS group.
+- Survival analysis in R (Kaplan–Meier and Cox regression), with a Quarto report.
 
 ## References
 
 - Chen T, Guestrin C. XGBoost: a scalable tree boosting system. *Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining*. 2016:785–794. doi:10.1145/2939672.2939785
-- Di Tommaso P, Chatzou M, Floden EW, et al. Nextflow enables reproducible computational workflows. *Nat Biotechnol*. 2017;35:316–319. doi:10.1038/nbt.3820
 - Grewal JK, Tessier-Cloutier B, Jones M, et al. Application of a neural network whole transcriptome–based pan-cancer method for diagnosis of primary and metastatic cancers. *JAMA Netw Open*. 2019;2(4):e192597. doi:10.1001/jamanetworkopen.2019.2597
 - Jiao W, Atwal G, Polak P, et al. A deep learning system accurately classifies primary and metastatic cancers using passenger mutation patterns. *Nat Commun*. 2020;11:728. doi:10.1038/s41467-019-13825-8
 - Lundberg SM, Lee SI. A unified approach to interpreting model predictions. *Advances in Neural Information Processing Systems 30 (NIPS 2017)*. 2017:4765–4774.
@@ -157,7 +128,3 @@ These will be revisited once results are in, but some are clear from the start:
 ## Acknowledgements
 
 This work uses data from the Personalized OncoGenomics (POG) program at BC Cancer. I thank the patients and families who took part, and the POG team for making the data available. The full acknowledgement text requested by the data providers is in `POG570_README.txt`, which comes with the download.
-
-## Author
-
-Maryam Allahyari
